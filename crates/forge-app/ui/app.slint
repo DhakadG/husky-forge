@@ -54,6 +54,7 @@ export component App inherits Window {
     in property <int> done;
     in property <int> total;
     in property <bool> running;
+    in property <bool> paused;
     in property <string> status-line;
     in property <[string]> presets;
     in property <bool> transparent-backdrop: false;
@@ -85,6 +86,7 @@ export component App inherits Window {
     callback options-changed();
     callback start();
     callback cancel();
+    callback pause();
     callback save-preset();
     callback load-preset(string);
     callback undo-last();
@@ -286,8 +288,9 @@ export component App inherits Window {
                 alignment: stretch;
                 ProgressIndicator { progress: total == 0 ? 0 : done / total; indeterminate: running && done == 0; }
                 Button { text: "Undo last"; enabled: !running; clicked => { undo-last(); } }
+                Button { text: paused ? "Resume" : "Pause"; enabled: running; clicked => { pause(); } }
                 Button { text: "Cancel"; enabled: running; clicked => { cancel(); } }
-                Button { text: running ? "Working…" : "START"; primary: true; enabled: file-count > 0 && !running; clicked => { start(); } }
+                Button { text: running ? (paused ? "Paused" : "Working…") : "START"; primary: true; enabled: file-count > 0 && !running; clicked => { start(); } }
             }
         }
     }

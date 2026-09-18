@@ -100,8 +100,8 @@ impl Impact {
         for ((k, f), n) in &self.conversions {
             v.push(format!("{n} {} → {n} {}", k.label(), f.label()));
         }
-        let bits: Vec<String> = self.bits.iter().map(|b| format!("{b}-bit")).collect();
-        v.push(if bits.is_empty() { "8-bit SDR".into() } else { format!("{} SDR", bits.join(" / ")) });
+        let bits: Vec<String> = self.bits.iter().map(|b| if *b == 32 { "32-bit float HDR".to_string() } else { format!("{b}-bit") }).collect();
+        v.push(if bits.is_empty() { "8-bit SDR".into() } else if self.bits.contains(&32) { bits.join(" / ") } else { format!("{} SDR", bits.join(" / ")) });
         if !self.estimate {
             let icc = if self.icc_files == 0 {
                 "no ICC in sources".to_string()

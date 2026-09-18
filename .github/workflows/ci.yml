@@ -16,5 +16,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libdbus-1-dev
-      - run: cargo test --workspace --release
-      - run: cargo clippy --workspace --release -- -D warnings
+      - name: libheif via vcpkg (windows, static)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          vcpkg install libheif:x64-windows-static-md
+          echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib/pkgconfig" >> $GITHUB_ENV
+          echo "PKG_CONFIG=$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/tools/pkgconf/pkgconf.exe" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALL_STATIC=1" >> $GITHUB_ENV
+          echo "SYSTEM_DEPS_LIBHEIF_LINK=static" >> $GITHUB_ENV
+          echo "FORGE_FEATURES=--features heic" >> $GITHUB_ENV
+      - run: cargo test --workspace --release $FORGE_FEATURES
+        shell: bash
+      - run: cargo clippy --workspace --release $FORGE_FEATURES -- -D warnings
+        shell: bash

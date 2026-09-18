@@ -8,10 +8,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
-use forge_core::{Event, Format, History, Impact, MetaMode, Mode, Options, Plan, Resize, impact::human, plan, run_with};
+use forge_core::{Control, Event, Format, History, Impact, MetaMode, Mode, Options, Plan, Resize, impact::human, plan, run_with};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
@@ -20,7 +20,7 @@ slint::include_modules!();
 struct State {
     paths: Vec<PathBuf>,
     plan: Option<Arc<Plan>>,
-    cancel: Arc<AtomicBool>,
+    ctl: Arc<Control>,
 }
 
 fn main() -> Result<()> {
@@ -125,7 +125,16 @@ fn main() -> Result<()> {
     });
     ui.on_cancel({
         let st = st.clone();
-        move || st.borrow().cancel.store(true, Ordering::Relaxed)
+        move || st.borrow().ctl.cancel.store(true, Ordering::Relaxed)
+    });
+    ui.on_pause({
+        let (ui, st) = (ui.as_weak(), st.clone());
+        move || {
+            let ctl = st.borrow().ctl.clone();
+            let now = !ctl.pause.load(Ordering::Relaxed);
+            ctl.pause.store(now, Ordering::Relaxed);
+            ui.unwrap().set_paused(now);
+        }
     });
     ui.on_start({
         let (ui, st) = (ui.as_weak(), st.clone());
@@ -254,8 +263,9 @@ fn start(ui: &App, st: &Rc<RefCell<State>>) {
         Some(p) if !p.items.is_empty() => p,
         _ => return,
     };
-    let cancel = Arc::new(AtomicBool::new(false));
-    st.borrow_mut().cancel = cancel.clone();
+    let ctl = Arc::new(Control::default());
+    st.borrow_mut().ctl = ctl.clone();
+    ui.set_paused(false);
     let index: HashMap<PathBuf, usize> = plan.items.iter().enumerate().map(|(i, it)| (it.path.clone(), i)).collect();
     ui.set_running(true);
     ui.set_done(0);
@@ -289,12 +299,12 @@ fn start(ui: &App, st: &Rc<RefCell<State>>) {
                 }
             });
         };
-        let outs = run_with(&plan, &o, &on, &cancel);
+        let outs = run_with(&plan, &o, &on, &ctl);
         let impact = Impact::from_outcomes(&outs, &o);
         let recorded = History::open(&History::default_path()).and_then(|mut h| h.record(&o, &outs, &impact));
         let lines: Vec<SharedString> = impact.lines().into_iter().map(Into::into).collect();
         let status = match recorded {
-            Ok(id) if cancel.load(Ordering::Relaxed) => format!("cancelled — {} of {} done, recorded as job #{id}", outs.len(), plan.items.len()),
+            Ok(id) if ctl.cancel.load(Ordering::Relaxed) => format!("cancelled — {} of {} done, recorded as job #{id}", outs.len(), plan.items.len()),
             Ok(id) => format!("done — job #{id}"),
             Err(e) => format!("done (history not saved: {e:#})"),
         };

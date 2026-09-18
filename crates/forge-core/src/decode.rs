@@ -24,6 +24,11 @@ pub fn decode(path: &Path) -> Result<Source> {
     }
     let (img, mut meta, via) = match kind {
         Kind::Raw => (develop_raw(path)?, Meta::default(), "rawler"),
+        #[cfg(feature = "heic")]
+        Kind::Heic | Kind::Avif => {
+            let (img, meta) = crate::heif::decode(path)?;
+            (img, meta, "libheif")
+        }
         Kind::Jxl => {
             let dec = jxl_oxide::integration::JxlDecoder::new(BufReader::new(File::open(path)?))?;
             let (img, meta) = from_decoder(dec)?;

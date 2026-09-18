@@ -7,6 +7,8 @@ license.workspace = true
 [features]
 default = ["jxl"]
 jxl = ["dep:jpegxl-rs"]
+# HEIC/HEIF + AVIF decode via libheif (needs libheif + libde265/dav1d at build time; CI provides them).
+heic = ["dep:libheif-rs"]
 
 [dependencies]
 anyhow = "1"
@@ -14,6 +16,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 rawler = "0.8"
 jxl-oxide = { version = "0.12", features = ["image"] }
 jpegxl-rs = { version = "0.15", features = ["vendored"], optional = true }
+libheif-rs = { version = "3", default-features = false, features = ["v1_17"], optional = true }
 ravif = { version = "0.13", default-features = false, features = ["threading"] }
 rgb = "0.8"
 mozjpeg = "0.10"

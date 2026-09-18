@@ -40,10 +40,11 @@ impl Format {
     pub fn carries_icc(self) -> bool {
         matches!(self, Format::Jpeg | Format::Png | Format::Webp)
     }
-    /// Highest bit depth this path writes: PNG/JXL 16, AVIF 10, JPEG/WebP 8.
+    /// Highest bit depth this path writes: JXL 32 (float), PNG 16, AVIF 10, JPEG/WebP 8.
     pub fn max_bits(self) -> u8 {
         match self {
-            Format::Png | Format::Jxl => 16,
+            Format::Jxl => 32,
+            Format::Png => 16,
             Format::Avif => 10,
             Format::Jpeg | Format::Webp => 8,
         }
@@ -81,9 +82,13 @@ pub fn resize(img: DynamicImage, nw: u32, nh: u32) -> Result<DynamicImage> {
 }
 
 /// Bits per sample the encoder will actually write for this image.
+/// ponytail: float sources into 8/10/16-bit formats are clipped, not tone-mapped, for now.
 pub fn output_bits(img: &DynamicImage, f: Format) -> u8 {
-    let deep = matches!(img, DynamicImage::ImageRgb16(_) | DynamicImage::ImageRgba16(_) | DynamicImage::ImageRgb32F(_) | DynamicImage::ImageRgba32F(_));
-    if deep { f.max_bits() } else { 8 }
+    match img {
+        DynamicImage::ImageRgb32F(_) | DynamicImage::ImageRgba32F(_) => f.max_bits(),
+        DynamicImage::ImageRgb16(_) | DynamicImage::ImageRgba16(_) | DynamicImage::ImageLuma16(_) | DynamicImage::ImageLumaA16(_) => f.max_bits().min(16),
+        _ => 8,
+    }
 }
 
 /// `meta` is what gets embedded where the container supports it at encode time (AVIF, JXL);
@@ -158,7 +163,10 @@ pub fn encode(img: &DynamicImage, f: Format, quality: u8, meta: &Meta) -> Result
             if let Some(x) = &meta.xmp {
                 enc.add_metadata(&Metadata::Xmp(x), true)?;
             }
-            let data = if bits == 16 {
+            let data = if bits == 32 {
+                let rgb = img.to_rgb32f();
+                enc.encode::<f32, u8>(rgb.as_raw(), w as u32, h as u32)?.data
+            } else if bits == 16 {
                 let rgb = img.to_rgb16();
                 enc.encode::<u16, u8>(rgb.as_raw(), w as u32, h as u32)?.data
             } else {

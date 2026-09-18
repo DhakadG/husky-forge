@@ -52,8 +52,8 @@ impl Kind {
         }
     }
 
-    /// Decodable by the current engine. HEIC/AVIF decode need libheif/dav1d — phase 2.
+    /// Decodable by this build. HEIC/AVIF need the `heic` feature (libheif).
     pub fn supported(self) -> bool {
-        !matches!(self, Kind::Heic | Kind::Avif)
+        cfg!(feature = "heic") || !matches!(self, Kind::Heic | Kind::Avif)
     }
 }
