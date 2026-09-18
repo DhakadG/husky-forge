@@ -34,10 +34,7 @@ jobs:
         shell: bash
         run: |
           vcpkg install libheif:x64-windows-static-md
-          echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/lib/pkgconfig" >> $GITHUB_ENV
-          echo "PKG_CONFIG=$VCPKG_INSTALLATION_ROOT/installed/x64-windows-static-md/tools/pkgconf/pkgconf.exe" >> $GITHUB_ENV
-          echo "PKG_CONFIG_ALL_STATIC=1" >> $GITHUB_ENV
-          echo "SYSTEM_DEPS_LIBHEIF_LINK=static" >> $GITHUB_ENV
+          echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
           echo "FORGE_FEATURES=--features heic" >> $GITHUB_ENV
       - run: cargo build --release --workspace --target ${{ matrix.target }} $FORGE_FEATURES
         shell: bash
