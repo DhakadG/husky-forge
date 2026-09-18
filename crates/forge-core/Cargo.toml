@@ -1,0 +1,26 @@
+[package]
+name = "forge-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["jxl"]
+jxl = ["dep:jpegxl-rs"]
+
+[dependencies]
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "tiff", "bmp", "gif"] }
+rawler = "0.8"
+jxl-oxide = { version = "0.12", features = ["image"] }
+jpegxl-rs = { version = "0.15", features = ["vendored"], optional = true }
+ravif = { version = "0.13", default-features = false, features = ["threading"] }
+rgb = "0.8"
+mozjpeg = "0.10"
+webp = "0.3"
+fast_image_resize = { version = "6", features = ["image"] }
+img-parts = "0.4"
+kamadak-exif = "0.6"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+walkdir = "2"
