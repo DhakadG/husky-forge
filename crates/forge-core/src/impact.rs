@@ -5,6 +5,7 @@ use crate::encode::Format;
 use crate::inspect::Kind;
 use crate::job::{Options, Outcome, Plan};
 use crate::meta::MetaMode;
+use crate::transform::Resize;
 
 /// Bytes per output pixel at quality 82, measured on real archives by Husky Drop.
 fn bpp(f: Format) -> f64 {
@@ -29,7 +30,11 @@ pub struct Impact {
     pub gps_files: usize,
     pub icc_files: usize,
     pub exif_files: usize,
-    pub max_mp: f64,
+    pub icc_converted: usize,
+    /// Distinct output bit depths seen.
+    pub bits: std::collections::BTreeSet<u8>,
+    pub resize: Resize,
+    pub lut: bool,
     pub quality: u8,
     pub target_bytes: u64,
     pub meta: MetaMode,
@@ -42,7 +47,11 @@ impl Impact {
         for it in &plan.items {
             let f = o.output_format(it.kind);
             // Unknown dimensions until decode; assume the cap (or 12 MP) like Husky Drop does.
-            let px = if o.max_mp > 0.0 { o.max_mp * 1e6 } else { 12e6 };
+            let px = match o.resize {
+                Resize::Cap { mp } => mp * 1e6,
+                Resize::Fit { w, h } | Resize::Fill { w, h } | Resize::Pad { w, h, .. } => (w * h) as f64,
+                Resize::None => 12e6,
+            };
             let guess = (px * bpp(f) * (o.quality as f64 / 82.0)) as u64;
             let guess = if o.target_bytes > 0 && f.lossy() { guess.min(o.target_bytes) } else { guess };
             i.before += it.size;
@@ -67,12 +76,14 @@ impl Impact {
             i.gps_files += r.had_gps as usize;
             i.icc_files += r.had_icc as usize;
             i.exif_files += r.had_exif as usize;
+            i.icc_converted += r.icc_converted as usize;
+            i.bits.insert(r.bits);
         }
         i
     }
 
     fn base(o: &Options) -> Impact {
-        Impact { max_mp: o.max_mp, quality: o.quality, target_bytes: o.target_bytes, meta: o.meta, ..Default::default() }
+        Impact { resize: o.resize, lut: o.lut.is_some(), quality: o.quality, target_bytes: o.target_bytes, meta: o.meta, ..Default::default() }
     }
 
     pub fn percent_smaller(&self) -> u32 {
@@ -89,12 +100,20 @@ impl Impact {
         for ((k, f), n) in &self.conversions {
             v.push(format!("{n} {} → {n} {}", k.label(), f.label()));
         }
-        v.push("8-bit SDR".into());
+        let bits: Vec<String> = self.bits.iter().map(|b| format!("{b}-bit")).collect();
+        v.push(if bits.is_empty() { "8-bit SDR".into() } else { format!("{} SDR", bits.join(" / ")) });
         if !self.estimate {
+            let icc = if self.icc_files == 0 {
+                "no ICC in sources".to_string()
+            } else if self.icc_converted > 0 {
+                format!("ICC folded into sRGB ({} files)", self.icc_converted)
+            } else {
+                "ICC preserved".to_string()
+            };
             match self.meta {
-                MetaMode::Strip => v.push("ICC preserved, EXIF removed".into()),
+                MetaMode::Strip => v.push(format!("{icc}, EXIF removed")),
                 _ => {
-                    v.push(if self.icc_files > 0 { "ICC preserved".into() } else { "no ICC in sources".into() });
+                    v.push(icc);
                     v.push(if self.exif_files > 0 { "EXIF preserved".into() } else { "no EXIF in sources".into() });
                 }
             }
@@ -111,8 +130,11 @@ impl Impact {
                 MetaMode::Strip => "ICC preserved · EXIF removed".into(),
             });
         }
-        if self.max_mp > 0.0 {
-            v.push(format!("Dimensions capped at {} MP", trim(self.max_mp)));
+        if let Some(d) = self.resize.describe() {
+            v.push(d);
+        }
+        if self.lut {
+            v.push("LUT applied".into());
         }
         if self.target_bytes > 0 {
             v.push(format!("Quality individually tuned to {} target", human(self.target_bytes)));
@@ -126,9 +148,6 @@ impl Impact {
     }
 }
 
-fn trim(x: f64) -> String {
-    if x.fract() == 0.0 { format!("{}", x as u64) } else { format!("{x:.1}") }
-}
 
 pub fn human(b: u64) -> String {
     const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];

@@ -7,9 +7,11 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::decode;
-use crate::encode::{Format, cap_megapixels, encode_to_target};
+use crate::encode::{Format, encode_to_target, output_bits};
+use crate::transform::{Lut, Resize};
 use crate::inspect::Kind;
 use crate::meta::{MetaMode, inject};
+use crate::color::to_srgb;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -27,8 +29,9 @@ pub struct Options {
     /// None = same family (RAW/TIFF/BMP/HEIC → JPEG, GIF → PNG, others keep their format).
     pub format: Option<Format>,
     pub quality: u8,
-    /// 0 = no cap.
-    pub max_mp: f64,
+    pub resize: Resize,
+    /// Optional .cube LUT applied after resize.
+    pub lut: Option<PathBuf>,
     /// 0 = no target.
     pub target_bytes: u64,
     pub meta: MetaMode,
@@ -49,7 +52,8 @@ impl Default for Options {
         Options {
             format: None,
             quality: 82,
-            max_mp: 8.0,
+            resize: Resize::default(),
+            lut: None,
             target_bytes: 0,
             meta: MetaMode::Keep,
             mode: Mode::Copy,
@@ -158,6 +162,9 @@ pub struct Outcome {
     pub had_icc: bool,
     pub had_exif: bool,
     pub had_gps: bool,
+    /// Source ICC was folded into sRGB because the container cannot carry it.
+    pub icc_converted: bool,
+    pub bits: u8,
     pub error: Option<String>,
 }
 
@@ -189,6 +196,8 @@ pub fn run(plan: &Plan, o: &Options, on: &(dyn Fn(Event) + Sync)) -> Vec<Outcome
                     had_icc: false,
                     had_exif: false,
                     had_gps: false,
+                    icc_converted: false,
+                    bits: 0,
                     error: Some(format!("{e:#}")),
                 });
                 on(Event::Finished(&out));
@@ -202,12 +211,23 @@ fn process(item: &Item, o: &Options) -> Result<Outcome> {
     let format = o.output_format(item.kind);
     let src = decode(&item.path)?;
     let (had_icc, had_exif, had_gps) = (src.meta.icc.is_some(), src.meta.exif.is_some(), src.meta.has_gps);
-    let img = cap_megapixels(src.img, o.max_mp)?;
+    let mut carried = src.meta.carried(o.meta);
+    let mut img = o.resize.apply(src.img)?;
+    if let Some(p) = &o.lut {
+        img = Lut::load(p)?.apply(img);
+    }
+    let mut icc_converted = false;
+    if !format.carries_icc()
+        && let Some(icc) = carried.icc.take()
+    {
+        img = to_srgb(img, &icc)?;
+        icc_converted = true;
+    }
     let (w, h) = (img.width(), img.height());
-    let icc = src.meta.icc.as_deref();
-    let (bytes, quality) = encode_to_target(&img, format, o.quality, o.target_bytes, icc)?;
+    let bits = output_bits(&img, format);
+    let (bytes, quality) = encode_to_target(&img, format, o.quality, o.target_bytes, &carried)?;
     drop(img);
-    let bytes = inject(bytes, format, &src.meta, o.meta)?;
+    let bytes = inject(bytes, format, &carried)?;
     let mut outcome = Outcome {
         path: item.path.clone(),
         out: None,
@@ -222,6 +242,8 @@ fn process(item: &Item, o: &Options) -> Result<Outcome> {
         had_icc,
         had_exif,
         had_gps,
+        icc_converted,
+        bits,
         error: None,
     };
     if o.only_if_smaller && (bytes.len() as u64) >= item.size * 9 / 10 {
@@ -308,7 +330,7 @@ mod tests {
         for (x, y, p) in img.enumerate_pixels_mut() {
             *p = image::Rgb([(x * 7 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8]);
         }
-        let png = encode(&DynamicImage::ImageRgb8(img), Format::Png, 100, None).unwrap();
+        let png = encode(&DynamicImage::ImageRgb8(img), Format::Png, 100, &crate::meta::Meta::default()).unwrap();
         fs::write(&src, png).unwrap();
         let o = Options { format: Some(Format::Jpeg), min_bytes: 0, only_if_smaller: false, ..Options::default() };
         let p = plan(&[dir.clone()], &o);

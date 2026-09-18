@@ -23,6 +23,19 @@ pub enum MetaMode {
     Strip,
 }
 
+impl Meta {
+    /// What survives into the output under `mode`: EXIF rewritten (orientation dropped, GPS optional), XMP kept or dropped.
+    pub fn carried(&self, mode: MetaMode) -> Meta {
+        let exif = match mode {
+            MetaMode::Strip => None,
+            MetaMode::StripGps => self.exif.as_deref().and_then(|e| rewrite_exif(e, true)),
+            MetaMode::Keep => self.exif.as_deref().and_then(|e| rewrite_exif(e, false)),
+        };
+        let xmp = if mode == MetaMode::Strip { None } else { self.xmp.clone() };
+        Meta { icc: self.icc.clone(), exif, xmp, has_gps: self.has_gps && mode == MetaMode::Keep }
+    }
+}
+
 pub fn has_gps(exif: &[u8]) -> bool {
     exif::Reader::new()
         .read_raw(exif.to_vec())
@@ -53,17 +66,12 @@ pub fn rewrite_exif(raw: &[u8], strip_gps: bool) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
-/// Attach metadata to freshly encoded bytes. AVIF/JXL take ICC at encode time;
-/// EXIF/XMP for those containers is phase 2.
-pub fn inject(bytes: Vec<u8>, f: Format, m: &Meta, mode: MetaMode) -> Result<Vec<u8>> {
-    let exif = match mode {
-        MetaMode::Strip => None,
-        MetaMode::StripGps => m.exif.as_deref().and_then(|e| rewrite_exif(e, true)),
-        MetaMode::Keep => m.exif.as_deref().and_then(|e| rewrite_exif(e, false)),
-    };
+/// Attach already-`carried` metadata to freshly encoded JPEG/PNG/WebP bytes.
+/// AVIF/JXL took theirs at encode time.
+pub fn inject(bytes: Vec<u8>, f: Format, m: &Meta) -> Result<Vec<u8>> {
     let icc = m.icc.clone().map(Bytes::from);
-    let exif = exif.map(Bytes::from);
-    let xmp = if mode == MetaMode::Strip { None } else { m.xmp.clone() };
+    let exif = m.exif.clone().map(Bytes::from);
+    let xmp = m.xmp.clone();
     let mut out = Vec::new();
     match f {
         Format::Jpeg => {

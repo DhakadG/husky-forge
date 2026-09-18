@@ -37,14 +37,17 @@ Split further only when a file passes ~500 lines.
 - Impact card: estimate before, real numbers after
 
 ### 2 — engine depth
-- [ ] HEIC decode (libheif, feature-gated) · AVIF decode (dav1d, feature-gated)
-- [ ] ICC → sRGB conversion (`moxcms`) when output cannot carry the profile; keep profile otherwise
-- [ ] 16-bit / HDR path: AVIF + JXL from Rgb16 / Rgb32F; PQ/HLG passthrough
-- [ ] EXIF/XMP boxes for AVIF + JXL containers
-- [ ] LUT (.cube) apply · padding / fit / fill resize modes
-- [ ] SQLite history (`rusqlite` bundled): every job, every file, undo for copy/archive
-- [ ] recurring rules (folder + options + schedule) — from Husky Drop `images-rules`
+- [x] ICC → sRGB conversion (`moxcms`) when output cannot carry the profile; keep profile otherwise
+- [x] 16-bit path: PNG/JXL 16-bit, AVIF 10-bit from Rgb16 sources (RAW develops to 16-bit)
+- [x] EXIF (+XMP) boxes for AVIF + JXL containers
+- [x] LUT (.cube 1D/3D) · fit / fill / pad resize modes
+- [x] SQLite history (`rusqlite` bundled): every job, every file, undo for copy/archive
+- [x] recurring rules (paths + options + cadence), `forge rule run-due` for the OS scheduler
+- [ ] HEIC decode (libheif + libde265, static) · AVIF decode (dav1d, static) — bundled in CI, never a user install
+- [ ] HDR: Rgb32F / PQ / HLG passthrough into AVIF + JXL; tone-map to SDR for JPEG/WebP
+- [ ] ICC embedding for AVIF (`avif-serialize` colr box) and JXL (`JxlEncoderSetICCProfile`) — drop the sRGB fold
 - [ ] MakerNote offset relocation on EXIF rewrite
+- [ ] rawler: expose white balance / exposure / highlight recovery as advanced options
 
 ### 3 — UI (Slint)
 - [ ] simple mode: drop zone → format → quality → keep originals → Convert
