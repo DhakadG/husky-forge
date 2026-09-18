@@ -19,7 +19,7 @@ Each package ships the desktop app (`husky-forge`) and the CLI (`forge`). From s
 
 ## Desktop app
 
-Drop folders or photos, pick a format and quality, press START. Advanced mode adds per-file size
+Drop folders or photos, pick a format and quality, press START. On Windows, right-click any folder or image → **Husky Forge** for one-click actions (the installer sets this up; portable users run `forge shell install`). Advanced mode adds per-file size
 targets, fit/fill/pad resizing, .cube LUTs, metadata policy, worker count and presets. The Impact card
 shows the estimate before and the real numbers after. Undo reverts the last copy/archive job.
 

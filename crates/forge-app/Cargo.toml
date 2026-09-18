@@ -16,6 +16,8 @@ heic = ["forge-core/heic"]
 [dependencies]
 forge-core = { path = "../forge-core", default-features = false }
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+interprocess = "2"
 dirs = "6"
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }

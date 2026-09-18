@@ -1,5 +1,6 @@
 //! `forge` — headless front end for forge-core. Same engine the desktop app uses.
 mod schedule;
+mod shell;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,6 +39,17 @@ enum Cmd {
         #[command(subcommand)]
         cmd: RuleCmd,
     },
+    /// File-manager integration (Windows: Explorer right-click menu; re-run after saving presets).
+    Shell {
+        #[command(subcommand)]
+        cmd: ShellCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ShellCmd {
+    Install,
+    Remove,
 }
 
 #[derive(Subcommand)]
@@ -210,6 +222,21 @@ fn main() -> Result<()> {
             let n = db()?.undo(job)?;
             println!("restored {n} files");
             Ok(())
+        }
+        Some(Cmd::Shell { cmd }) => {
+            #[cfg(windows)]
+            {
+                println!("{}", match cmd {
+                    ShellCmd::Install => shell::install()?,
+                    ShellCmd::Remove => shell::remove()?,
+                });
+                Ok(())
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = cmd;
+                bail!("shell integration is Windows-only for now; macOS/Linux use the .app / .desktop file")
+            }
         }
         Some(Cmd::Rule { cmd }) => {
             let mut h = db()?;

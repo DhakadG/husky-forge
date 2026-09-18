@@ -1,4 +1,5 @@
 //! The only OS-specific code in the app: window material and notifications.
+#[cfg(any(windows, target_os = "macos"))]
 use slint::ComponentHandle;
 
 use crate::App;

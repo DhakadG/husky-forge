@@ -31,21 +31,18 @@ Name: "{autodesktop}\Husky Forge"; Filename: "{app}\husky-forge.exe"; Tasks: des
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
-Name: "contextmenu"; Description: "Add ""Forge with Husky"" to the Explorer right-click menu"
+Name: "contextmenu"; Description: "Add a ""Husky Forge"" menu to the Explorer right-click menu (folders and images)"
 Name: "path"; Description: "Add the forge command-line tool to PATH"; Flags: unchecked
 
 [Registry]
-; Right-click on folders and image files → open them in Husky Forge.
-Root: HKA; Subkey: "Software\Classes\Directory\shell\HuskyForge"; ValueType: string; ValueName: ""; ValueData: "Forge with Husky"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\Directory\shell\HuskyForge"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\husky-forge.exe"""; Tasks: contextmenu
-Root: HKA; Subkey: "Software\Classes\Directory\shell\HuskyForge\command"; ValueType: string; ValueName: ""; ValueData: """{app}\husky-forge.exe"" ""%1"""; Tasks: contextmenu
-Root: HKA; Subkey: "Software\Classes\*\shell\HuskyForge"; ValueType: string; ValueName: ""; ValueData: "Forge with Husky"; Tasks: contextmenu; Flags: uninsdeletekey
-Root: HKA; Subkey: "Software\Classes\*\shell\HuskyForge"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\husky-forge.exe"""; Tasks: contextmenu
-Root: HKA; Subkey: "Software\Classes\*\shell\HuskyForge\command"; ValueType: string; ValueName: ""; ValueData: """{app}\husky-forge.exe"" ""%1"""; Tasks: contextmenu
 Root: HKA; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: path; Check: not PathHas(ExpandConstant('{app}'))
 
 [Run]
+Filename: "{app}\forge.exe"; Parameters: "shell install"; Tasks: contextmenu; Flags: runhidden
 Filename: "{app}\husky-forge.exe"; Description: "Launch Husky Forge"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{app}\forge.exe"; Parameters: "shell remove"; Flags: runhidden; RunOnceId: "shellremove"
 
 [Code]
 function PathHas(Dir: string): Boolean;

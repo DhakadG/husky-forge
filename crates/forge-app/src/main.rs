@@ -1,5 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 //! Husky Forge desktop app: Slint front end over forge-core.
+mod launch;
 mod platform;
 mod presets;
 mod update;
@@ -24,24 +25,23 @@ struct State {
     ctl: Arc<Control>,
 }
 
+thread_local! {
+    // The UI thread's state, reachable from `upgrade_in_event_loop` closures (which cannot capture an Rc).
+    static STATE: RefCell<Option<Rc<RefCell<State>>>> = const { RefCell::new(None) };
+}
+
 fn main() -> Result<()> {
+    if launch::forward_to_running() {
+        return Ok(());
+    }
     let ui = App::new()?;
     platform::decorate(&ui);
     let st = Rc::new(RefCell::new(State::default()));
+    STATE.with(|s| *s.borrow_mut() = Some(st.clone()));
     ui.set_files(ModelRc::new(VecModel::<FileRow>::default()));
     ui.set_impact_lines(ModelRc::new(VecModel::<SharedString>::default()));
     ui.set_presets(ModelRc::new(VecModel::from(presets::list())));
 
-    let add = |ui: &App, st: &Rc<RefCell<State>>, new: Vec<PathBuf>| {
-        let mut s = st.borrow_mut();
-        for p in new {
-            if !s.paths.contains(&p) {
-                s.paths.push(p);
-            }
-        }
-        drop(s);
-        replan(ui, st);
-    };
 
     ui.on_add_files({
         let (ui, st) = (ui.as_weak(), st.clone());
@@ -142,11 +142,18 @@ fn main() -> Result<()> {
         move || start(&ui.unwrap(), &st)
     });
 
-    // Paths on the command line: Explorer / Finder "Forge with Husky" integration and plain scripting.
-    let argv: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).filter(|p| p.exists()).collect();
-    if !argv.is_empty() {
-        add(&ui, &st, argv);
-    }
+    // Explorer / Finder / second instances arrive as a `Launch`: preset + flags + paths (+ --start).
+    apply_launch(&ui, &st, launch::from_env());
+    launch::listen({
+        let weak = ui.as_weak();
+        move |l| {
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                if let Some(st) = STATE.with(|s| s.borrow().clone()) {
+                    apply_launch(&ui, &st, l);
+                }
+            });
+        }
+    });
 
     // Version check off the UI thread; a newer tag just shows in the status line.
     {
@@ -160,6 +167,55 @@ fn main() -> Result<()> {
 
     ui.run()?;
     Ok(())
+}
+
+fn add(ui: &App, st: &Rc<RefCell<State>>, new: Vec<PathBuf>) {
+    let mut s = st.borrow_mut();
+    for p in new {
+        if !s.paths.contains(&p) {
+            s.paths.push(p);
+        }
+    }
+    drop(s);
+    replan(ui, st);
+}
+
+/// Preset, then flag overrides, then paths; `--start` runs immediately (Explorer one-click actions).
+fn apply_launch(ui: &App, st: &Rc<RefCell<State>>, l: launch::Launch) {
+    if let Some(name) = &l.preset {
+        match presets::load(name) {
+            Ok(o) => apply_options(ui, &o),
+            Err(e) => ui.set_status_line(format!("preset: {e:#}").into()),
+        }
+    }
+    if let Some(f) = l.to {
+        ui.set_format_index(f as i32);
+    }
+    if let Some(q) = l.quality {
+        ui.set_quality(q.clamp(1, 100) as f32);
+    }
+    if let Some(mp) = l.max_mp {
+        ui.set_resize_index(if mp > 0.0 { 1 } else { 0 });
+        ui.set_max_mp(format!("{mp}").into());
+    }
+    if let Some(mb) = l.target_mb {
+        ui.set_target_mb(format!("{mb}").into());
+    }
+    if let Some(m) = l.meta {
+        ui.set_meta_index(m as i32);
+    }
+    if let Some(m) = l.mode {
+        ui.set_originals_index(m as i32);
+    }
+    let paths: Vec<PathBuf> = l.paths.into_iter().filter(|p| p.exists()).collect();
+    if paths.is_empty() {
+        replan(ui, st);
+    } else {
+        add(ui, st, paths);
+    }
+    if l.start && !ui.get_running() && ui.get_file_count() > 0 {
+        start(ui, st);
+    }
 }
 
 fn options_from(ui: &App) -> Result<Options> {

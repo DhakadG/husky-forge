@@ -68,7 +68,9 @@ Split further only when a file passes ~500 lines.
 - [ ] history browser inside the app (today: `forge history` / `forge undo`)
 
 ### 4 — platform
-- [x] Windows: Mica (`window-vibrancy`), toast (`notify-rust`), Task Scheduler (`forge rule schedule`), Explorer context menu (installer)
+- [x] Windows: Mica (`window-vibrancy`), toast (`notify-rust`), Task Scheduler (`forge rule schedule`)
+- [x] Windows Explorer: `forge shell install` writes a "Husky Forge" cascade (open / JPEG copy / JXL / AVIF / archive 2.5 MB / strip GPS / every saved preset) on folders, folder backgrounds and image files; one-click entries pass `--start`; multi-select funnels into the running window
+- [ ] Windows 11 top-level menu entry (needs a sparse MSIX + IExplorerCommand; today the cascade sits under "Show more options")
 - [x] macOS: vibrancy, launchd agent, notifications, `.app` accepts folders/images
 - [x] Linux: XDG dirs (`dirs`), systemd user timer, desktop notifications, `.desktop` with MimeTypes
 - [x] native file dialogs (`rfd`)
