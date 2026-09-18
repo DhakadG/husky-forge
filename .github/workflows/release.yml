@@ -33,8 +33,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          vcpkg install libheif:x64-windows-static-md
+          vcpkg install libheif:x64-windows-static
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+          echo "VCPKGRS_TRIPLET=x64-windows-static" >> $GITHUB_ENV
           echo "FORGE_FEATURES=--features heic" >> $GITHUB_ENV
       - run: cargo build --release --workspace --target ${{ matrix.target }} $FORGE_FEATURES
         shell: bash

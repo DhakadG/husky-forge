@@ -36,10 +36,10 @@ pub fn decode(path: &Path) -> Result<(DynamicImage, Meta)> {
     };
     let icc = handle.color_profile_raw().map(|p| p.data).filter(|d| !d.is_empty());
     // EXIF blocks carry a 4-byte offset to the TIFF header first.
-    let exif = handle.all_metadata().into_iter().find(|m| m.item_type == "Exif").and_then(|m| {
+    let exif = handle.all_metadata().into_iter().find(|m| &m.item_type.0 == b"Exif").and_then(|m| {
         let off = u32::from_be_bytes(m.raw_data.get(0..4)?.try_into().ok()?) as usize;
         m.raw_data.get(4 + off..).map(|s| s.to_vec())
     });
-    let xmp = handle.all_metadata().into_iter().find(|m| m.item_type == "mime").map(|m| m.raw_data);
+    let xmp = handle.all_metadata().into_iter().find(|m| &m.item_type.0 == b"mime").map(|m| m.raw_data);
     Ok((img, Meta { icc, exif, xmp, has_gps: false }))
 }

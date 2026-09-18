@@ -48,8 +48,15 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum ShellCmd {
-    Install,
-    Remove,
+    /// Add the menu. --machine writes HKLM for all users (run elevated; what the installer does).
+    Install {
+        #[arg(long)]
+        machine: bool,
+    },
+    Remove {
+        #[arg(long)]
+        machine: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -244,8 +251,8 @@ fn main() -> Result<()> {
             #[cfg(windows)]
             {
                 println!("{}", match cmd {
-                    ShellCmd::Install => shell::install()?,
-                    ShellCmd::Remove => shell::remove()?,
+                    ShellCmd::Install { machine } => shell::install(machine)?,
+                    ShellCmd::Remove { machine } => shell::remove(machine)?,
                 });
                 Ok(())
             }
