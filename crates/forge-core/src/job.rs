@@ -2,12 +2,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::decode;
+use crate::develop::RawLook;
 use crate::encode::{Format, encode_to_target, output_bits};
 use crate::transform::{Lut, Resize};
 use crate::inspect::Kind;
@@ -46,6 +48,11 @@ pub struct Options {
     pub only_if_smaller: bool,
     /// 0 = all cores.
     pub workers: usize,
+    /// Write results here (mirroring each source root's folder structure) instead of beside the originals.
+    pub output_dir: Option<PathBuf>,
+    /// Tone treatment for developed RAW files.
+    #[serde(default)]
+    pub raw_look: RawLook,
 }
 
 impl Default for Options {
@@ -63,6 +70,8 @@ impl Default for Options {
             skip_sidecar: true,
             only_if_smaller: true,
             workers: 0,
+            output_dir: None,
+            raw_look: RawLook::default(),
         }
     }
 }
@@ -84,6 +93,14 @@ pub struct Item {
     pub path: PathBuf,
     pub kind: Kind,
     pub size: u64,
+    /// The folder (or file) this item was reached from; output mirrors the path below it.
+    pub root: PathBuf,
+}
+
+impl Item {
+    pub fn output_path(&self, o: &Options) -> PathBuf {
+        output_path(&self.path, &self.root, o)
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -110,10 +127,11 @@ pub fn plan(paths: &[PathBuf], o: &Options) -> Plan {
             let path = e.path().to_path_buf();
             let Some(kind) = Kind::from_path(&path) else { continue };
             let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-            if let Some(why) = skip_reason(&path, kind, size, o) {
-                p.skipped.push((path, why));
+            let item = Item { path, kind, size, root: root.clone() };
+            if let Some(why) = skip_reason(&item, o) {
+                p.skipped.push((item.path, why));
             } else {
-                p.items.push(Item { path, kind, size });
+                p.items.push(item);
             }
         }
     }
@@ -121,31 +139,48 @@ pub fn plan(paths: &[PathBuf], o: &Options) -> Plan {
     p
 }
 
-fn skip_reason(path: &Path, kind: Kind, size: u64, o: &Options) -> Option<String> {
-    if !kind.supported() {
-        return Some(format!("{} not supported yet", kind.label()));
+fn skip_reason(item: &Item, o: &Options) -> Option<String> {
+    if !item.kind.supported() {
+        return Some(format!("{} not supported yet", item.kind.label()));
     }
-    if size < o.min_bytes {
+    if item.size < o.min_bytes {
         return Some("already small".into());
     }
-    if o.skip_sidecar && kind == Kind::Raw && path.with_extension("xmp").exists() {
+    if o.skip_sidecar && item.kind == Kind::Raw && item.path.with_extension("xmp").exists() {
         return Some("RAW has an .xmp sidecar (edited)".into());
     }
-    let out = output_path(path, o.output_format(kind), o.mode);
-    if o.mode == Mode::Copy && out.exists() {
-        return Some("copy already exists".into());
+    let out = item.output_path(o);
+    if out != item.path && out.exists() && (o.mode == Mode::Copy || o.output_dir.is_some()) {
+        return Some("output already exists".into());
     }
     None
 }
 
-pub fn output_path(src: &Path, f: Format, mode: Mode) -> PathBuf {
-    let dir = src.parent().unwrap_or(Path::new("."));
+/// Where the result goes. Beside the original: copy mode uses `_compressed/`, archive/replace
+/// write in place. With `output_dir`: `<output_dir>/<path relative to the root's parent>` so a
+/// dropped folder keeps its name and structure.
+pub fn output_path(src: &Path, root: &Path, o: &Options) -> PathBuf {
+    let f = o.output_format(Kind::from_path(src).unwrap_or(Kind::Jpeg));
     let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
     let name = format!("{stem}.{}", f.ext());
-    match mode {
-        Mode::Copy => dir.join("_compressed").join(name),
-        Mode::Archive | Mode::Replace => dir.join(name),
+    let dir = src.parent().unwrap_or(Path::new("."));
+    match &o.output_dir {
+        Some(out) => {
+            let base = if root.is_dir() { root.parent().unwrap_or(root) } else { root.parent().unwrap_or(Path::new(".")) };
+            let rel = dir.strip_prefix(base).unwrap_or(Path::new(""));
+            out.join(rel).join(name)
+        }
+        None => match o.mode {
+            Mode::Copy => dir.join("_compressed").join(name),
+            Mode::Archive | Mode::Replace => dir.join(name),
+        },
     }
+}
+
+/// The folder results land in for a given source root, for display before a run.
+pub fn output_dir_for(root: &Path, o: &Options) -> PathBuf {
+    let probe = if root.is_dir() { root.join("x.jpg") } else { root.to_path_buf() };
+    output_path(&probe, root, o).parent().map(Path::to_path_buf).unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,7 +201,32 @@ pub struct Outcome {
     /// Source ICC was folded into sRGB because the container cannot carry it.
     pub icc_converted: bool,
     pub bits: u8,
+    pub ms: u64,
     pub error: Option<String>,
+}
+
+impl Outcome {
+    fn failed(item: &Item, o: &Options, error: String) -> Outcome {
+        Outcome {
+            path: item.path.clone(),
+            out: None,
+            kind: item.kind,
+            format: o.output_format(item.kind),
+            before: item.size,
+            after: 0,
+            quality: 0,
+            width: 0,
+            height: 0,
+            via: "",
+            had_icc: false,
+            had_exif: false,
+            had_gps: false,
+            icc_converted: false,
+            bits: 0,
+            ms: 0,
+            error: Some(error),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -190,8 +250,9 @@ pub struct Control {
 }
 
 pub fn run_with(plan: &Plan, o: &Options, on: &(dyn Fn(Event) + Sync), ctl: &Control) -> Vec<Outcome> {
+    log::info!("job start: {} files, {} bytes, {}", plan.items.len(), plan.total_bytes(), serde_json::to_string(o).unwrap_or_default());
     let pool = rayon::ThreadPoolBuilder::new().num_threads(o.workers).build().expect("thread pool");
-    pool.install(|| {
+    let outs: Vec<Outcome> = pool.install(|| {
         plan.items
             .par_iter()
             .filter(|_| {
@@ -203,29 +264,28 @@ pub fn run_with(plan: &Plan, o: &Options, on: &(dyn Fn(Event) + Sync), ctl: &Con
             })
             .map(|item| {
                 on(Event::Started(item));
-                let out = process(item, o).unwrap_or_else(|e| Outcome {
-                    path: item.path.clone(),
-                    out: None,
-                    kind: item.kind,
-                    format: o.output_format(item.kind),
-                    before: item.size,
-                    after: 0,
-                    quality: 0,
-                    width: 0,
-                    height: 0,
-                    via: "",
-                    had_icc: false,
-                    had_exif: false,
-                    had_gps: false,
-                    icc_converted: false,
-                    bits: 0,
-                    error: Some(format!("{e:#}")),
-                });
+                let t = Instant::now();
+                // A codec panic must cost one file, not the whole job.
+                let mut out = match std::panic::catch_unwind(|| process(item, o)) {
+                    Ok(Ok(out)) => out,
+                    Ok(Err(e)) => Outcome::failed(item, o, format!("{e:#}")),
+                    Err(p) => {
+                        let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                        Outcome::failed(item, o, format!("internal error: {msg}"))
+                    }
+                };
+                out.ms = t.elapsed().as_millis() as u64;
+                match &out.error {
+                    Some(e) => log::warn!("{}: {e}", item.path.display()),
+                    None => log::info!("{}: {} -> {} q{} {}x{} {}-bit via {} in {} ms", item.path.display(), out.before, out.after, out.quality, out.width, out.height, out.bits, out.via, out.ms),
+                }
                 on(Event::Finished(&out));
                 out
             })
             .collect()
-    })
+    });
+    log::info!("job end: {} done, {} failed, cancelled={}", outs.iter().filter(|o| o.error.is_none()).count(), outs.iter().filter(|o| o.error.is_some()).count(), ctl.cancel.load(Ordering::Relaxed));
+    outs
 }
 
 fn process(item: &Item, o: &Options) -> Result<Outcome> {
@@ -233,7 +293,8 @@ fn process(item: &Item, o: &Options) -> Result<Outcome> {
     let src = decode(&item.path)?;
     let (had_icc, had_exif, had_gps) = (src.meta.icc.is_some(), src.meta.exif.is_some(), src.meta.has_gps);
     let mut carried = src.meta.carried(o.meta);
-    let mut img = o.resize.apply(src.img)?;
+    let img = if item.kind == Kind::Raw { crate::develop::apply(src.img, o.raw_look) } else { src.img };
+    let mut img = o.resize.apply(img)?;
     if let Some(p) = &o.lut {
         img = Lut::load(p)?.apply(img);
     }
@@ -265,6 +326,7 @@ fn process(item: &Item, o: &Options) -> Result<Outcome> {
         had_gps,
         icc_converted,
         bits,
+        ms: 0,
         error: None,
     };
     if o.only_if_smaller && (bytes.len() as u64) >= item.size * 9 / 10 {
@@ -272,7 +334,7 @@ fn process(item: &Item, o: &Options) -> Result<Outcome> {
         outcome.error = Some("no worthwhile saving".into());
         return Ok(outcome);
     }
-    outcome.out = Some(commit(&item.path, output_path(&item.path, format, o.mode), &bytes, format, o.mode, (w, h))?);
+    outcome.out = Some(commit(&item.path, item.output_path(o), &bytes, format, o.mode, (w, h))?);
     Ok(outcome)
 }
 
@@ -360,7 +422,11 @@ mod tests {
         assert!(res[0].error.is_none(), "{:?}", res[0].error);
         assert!(dir.join("_compressed/a.jpg").exists());
         assert!(src.exists());
-        assert_eq!(plan(&[dir.clone()], &o).skipped[0].1, "copy already exists");
+        assert_eq!(plan(&[dir.clone()], &o).skipped[0].1, "output already exists");
+        // custom output dir mirrors the dropped folder's name
+        let out_dir = dir.join("out");
+        let o2 = Options { output_dir: Some(out_dir.clone()), ..o.clone() };
+        assert_eq!(plan(&[dir.clone()], &o2).items[0].output_path(&o2), out_dir.join(dir.file_name().unwrap()).join("a.jpg"));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

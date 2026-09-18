@@ -1,4 +1,5 @@
-import { Button, ComboBox, Slider, LineEdit, CheckBox, ScrollView, VerticalBox, HorizontalBox, GridBox, Switch, ProgressIndicator, Palette } from "std-widgets.slint";
+import { Button, ComboBox, Slider, LineEdit, CheckBox, ScrollView, Switch, ProgressIndicator, Palette } from "std-widgets.slint";
+import "../assets/fonts/InterVariable.ttf";
 
 export struct FileRow {
     name: string,
@@ -7,25 +8,33 @@ export struct FileRow {
     quality: string,
     status: string,
     failed: bool,
+    working: bool,
 }
 
 component Label inherits Text {
     color: Palette.foreground;
+    font-size: 13px;
+    vertical-alignment: center;
+}
+
+component Muted inherits Text {
+    color: Palette.foreground.with-alpha(0.6);
     font-size: 12px;
     vertical-alignment: center;
+}
+
+component Heading inherits Text {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    color: Palette.foreground.with-alpha(0.55);
 }
 
 component Section inherits VerticalLayout {
     in property <string> title;
     spacing: 8px;
-    padding-bottom: 12px;
-    Text {
-        text: title;
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 1.2px;
-        color: Palette.foreground.with-alpha(0.55);
-    }
+    padding-bottom: 14px;
+    Heading { text: title; }
     @children
 }
 
@@ -33,38 +42,56 @@ component Row inherits HorizontalLayout {
     in property <string> label;
     spacing: 12px;
     alignment: stretch;
-    Label { text: label; min-width: 96px; }
+    Label { text: label; min-width: 104px; }
     @children
+}
+
+component Card inherits Rectangle {
+    border-radius: 12px;
+    background: Palette.foreground.with-alpha(0.05);
+    border-width: 1px;
+    border-color: Palette.foreground.with-alpha(0.08);
 }
 
 export component App inherits Window {
     title: "Husky Forge";
     icon: @image-url("../assets/icon.png");
-    min-width: 960px;
-    min-height: 640px;
-    preferred-width: 1180px;
-    preferred-height: 760px;
+    default-font-family: "Inter";
+    default-font-size: 13px;
+    min-width: 980px;
+    min-height: 680px;
+    preferred-width: 1240px;
+    preferred-height: 820px;
     background: transparent;
 
     // ── state from Rust ──────────────────────────────────────────────
     in property <int> file-count;
     in property <string> total-size;
+    in property <string> output-hint;          // where results will land
     in property <[string]> impact-lines;
     in property <[FileRow]> files;
     in property <int> done;
+    in property <int> failed;
     in property <int> total;
     in property <bool> running;
     in property <bool> paused;
+    in property <bool> finished;               // a job completed since the last plan
+    in property <string> progress-line;        // "12 / 525 · 3 failed · 1m 20s · ~4m left"
     in property <string> status-line;
     in property <string> update-line;
     in property <[string]> presets;
+    in property <[string]> log-lines;
     in property <bool> transparent-backdrop: false;
+    in property <bool> drag-over: false;
 
     // ── options ──────────────────────────────────────────────────────
     in-out property <bool> advanced: false;
+    in-out property <bool> show-log: false;
     in-out property <int> format-index: 0;        // 0 same, 1 jpeg, 2 png, 3 webp, 4 avif, 5 jxl
     in-out property <float> quality: 82;
     in-out property <int> originals-index: 0;     // 0 copy, 1 archive, 2 replace
+    in-out property <int> output-index: 0;        // 0 beside originals, 1 custom folder
+    in-out property <string> output-dir: "";
     in-out property <int> meta-index: 0;          // 0 keep, 1 strip gps, 2 strip
     in-out property <int> resize-index: 1;        // 0 none, 1 cap, 2 fit, 3 fill, 4 pad
     in-out property <string> max-mp: "8";
@@ -76,6 +103,7 @@ export component App inherits Window {
     in-out property <bool> only-if-smaller: true;
     in-out property <bool> skip-sidecar: true;
     in-out property <bool> include-small: false;
+    in-out property <bool> raw-flat: false;
     in-out property <string> preset-name: "";
 
     callback add-files();
@@ -84,10 +112,13 @@ export component App inherits Window {
     pure callback accepts(data-transfer) -> bool;
     callback dropped(data-transfer);
     callback pick-lut();
+    callback pick-output-dir();
+    callback open-output();
+    callback open-log();
     callback options-changed();
-    callback start();
-    callback cancel();
+    callback start-job();
     callback pause();
+    callback cancel();
     callback save-preset();
     callback load-preset(string);
     callback undo-last();
@@ -103,11 +134,13 @@ export component App inherits Window {
             HorizontalLayout {
                 spacing: 12px;
                 VerticalLayout {
-                    Text { text: "HUSKY FORGE"; font-size: 18px; font-weight: 800; letter-spacing: 3px; color: Palette.foreground; }
-                    Text { text: "Image processing, perfected."; font-size: 12px; color: Palette.foreground.with-alpha(0.6); }
+                    Text { text: "HUSKY FORGE"; font-size: 19px; font-weight: 800; letter-spacing: 3px; color: Palette.foreground; }
+                    Muted { text: "Image processing, perfected."; }
                 }
                 Rectangle { }
-                if update-line != "": Label { text: update-line; color: Palette.accent-background; }
+                if update-line != "": Muted { text: update-line; color: Palette.accent-background; }
+                Label { text: "Log"; }
+                Switch { checked <=> show-log; }
                 Label { text: "Advanced"; }
                 Switch { checked <=> advanced; }
             }
@@ -121,30 +154,31 @@ export component App inherits Window {
                     spacing: 12px;
 
                     drop := DropArea {
-                        height: 150px;
+                        height: 160px;
                         can-drop(event) => { root.accepts(event.data) ? DragAction.copy : DragAction.none }
                         dropped(event) => { root.dropped(event.data); return DragAction.copy; }
                         Rectangle {
+                            property <bool> hot: drop.has-drag || drag-over;
                             border-radius: 12px;
                             border-width: 2px;
-                            border-color: drop.has-drag ? Palette.accent-background : Palette.foreground.with-alpha(0.2);
-                            background: drop.has-drag ? Palette.accent-background.with-alpha(0.12) : Palette.foreground.with-alpha(0.04);
+                            border-color: hot ? Palette.accent-background : Palette.foreground.with-alpha(0.18);
+                            background: hot ? Palette.accent-background.with-alpha(0.12) : Palette.foreground.with-alpha(0.04);
                             VerticalLayout {
                                 alignment: center;
                                 spacing: 6px;
                                 Text {
-                                    text: file-count == 0 ? "DROP YOUR PHOTOS HERE" : file-count + " files · " + total-size;
+                                    text: file-count == 0 ? "DROP FOLDERS OR PHOTOS HERE" : file-count + " files · " + total-size;
                                     font-size: 15px; font-weight: 700; letter-spacing: 1.5px;
                                     horizontal-alignment: center; color: Palette.foreground;
                                 }
-                                Text {
-                                    text: file-count == 0 ? "RAW · JPEG · PNG · WebP · TIFF · JPEG XL" : status-line;
-                                    font-size: 12px; horizontal-alignment: center; color: Palette.foreground.with-alpha(0.6);
+                                Muted {
+                                    text: file-count == 0 ? "RAW · JPEG · PNG · WebP · TIFF · HEIC · JPEG XL — or use the buttons" : output-hint;
+                                    horizontal-alignment: center;
                                 }
                                 HorizontalLayout {
                                     alignment: center; spacing: 8px;
-                                    Button { text: "Add files"; clicked => { add-files(); } }
-                                    Button { text: "Add folder"; clicked => { add-folder(); } }
+                                    Button { text: "Add files"; enabled: !running; clicked => { add-files(); } }
+                                    Button { text: "Add folder"; enabled: !running; clicked => { add-folder(); } }
                                     Button { text: "Clear"; enabled: file-count > 0 && !running; clicked => { clear(); } }
                                 }
                             }
@@ -167,6 +201,29 @@ export component App inherits Window {
                                 if advanced: Row { label: "Target size";
                                     LineEdit { text <=> target-mb; placeholder-text: "MB per photo, 0 = off"; edited => { options-changed(); } }
                                 }
+                                Row { label: "Write to";
+                                    ComboBox { model: ["Next to the originals", "A folder I choose"]; current-index <=> output-index; selected => { options-changed(); } }
+                                }
+                                if output-index == 1: Row { label: "";
+                                    LineEdit { text <=> output-dir; placeholder-text: "output folder"; edited => { options-changed(); } }
+                                    Button { text: "Browse…"; clicked => { pick-output-dir(); } }
+                                }
+                            }
+
+                            Section {
+                                title: "ORIGINALS";
+                                Row { label: "After success";
+                                    ComboBox { model: ["Keep them", "Move them to _archive/", "Delete them (replace)"]; current-index <=> originals-index; selected => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "";
+                                    CheckBox { text: "Only keep results at least 10% smaller"; checked <=> only-if-smaller; toggled => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "";
+                                    CheckBox { text: "Skip RAW files with .xmp sidecars"; checked <=> skip-sidecar; toggled => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "";
+                                    CheckBox { text: "Include files under 300 KB"; checked <=> include-small; toggled => { options-changed(); } }
+                                }
                             }
 
                             Section {
@@ -182,6 +239,9 @@ export component App inherits Window {
                                     Label { text: "×"; }
                                     LineEdit { text <=> resize-h; placeholder-text: "height"; edited => { options-changed(); } }
                                 }
+                                if advanced: Row { label: "";
+                                    CheckBox { text: "RAW: flat rendering (no auto levels / contrast)"; checked <=> raw-flat; toggled => { options-changed(); } }
+                                }
                                 if advanced: Row { label: "LUT (.cube)";
                                     LineEdit { text <=> lut-path; placeholder-text: "none"; edited => { options-changed(); } }
                                     Button { text: "…"; clicked => { pick-lut(); } }
@@ -192,22 +252,6 @@ export component App inherits Window {
                                 title: "METADATA";
                                 Row { label: "EXIF / XMP";
                                     ComboBox { model: ["Keep everything", "Keep, remove GPS", "Strip (keep ICC)"]; current-index <=> meta-index; selected => { options-changed(); } }
-                                }
-                            }
-
-                            Section {
-                                title: "ORIGINALS";
-                                Row { label: "After success";
-                                    ComboBox { model: ["Keep, write copies to _compressed/", "Move to _archive/", "Replace (delete originals)"]; current-index <=> originals-index; selected => { options-changed(); } }
-                                }
-                                if advanced: Row { label: "";
-                                    CheckBox { text: "Only keep results at least 10% smaller"; checked <=> only-if-smaller; toggled => { options-changed(); } }
-                                }
-                                if advanced: Row { label: "";
-                                    CheckBox { text: "Skip RAW files with .xmp sidecars"; checked <=> skip-sidecar; toggled => { options-changed(); } }
-                                }
-                                if advanced: Row { label: "";
-                                    CheckBox { text: "Include files under 300 KB"; checked <=> include-small; toggled => { options-changed(); } }
                                 }
                             }
 
@@ -232,51 +276,58 @@ export component App inherits Window {
                     }
                 }
 
-                // ── right: impact + files ─────────────────────────────
+                // ── right: impact + files (+ log) ─────────────────────
                 VerticalLayout {
                     spacing: 12px;
 
-                    Rectangle {
-                        border-radius: 12px;
+                    Card {
                         background: Palette.accent-background.with-alpha(0.10);
-                        border-width: 1px;
                         border-color: Palette.accent-background.with-alpha(0.35);
                         VerticalLayout {
                             padding: 16px;
                             spacing: 4px;
-                            Text { text: "IMPACT"; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; color: Palette.foreground.with-alpha(0.55); }
+                            Heading { text: finished ? "IMPACT" : (file-count > 0 ? "IMPACT · ESTIMATE" : "IMPACT"); }
                             for line[i] in impact-lines: Text {
                                 text: line;
                                 color: Palette.foreground;
-                                font-size: i == 0 ? 22px : i == 1 ? 16px : 13px;
+                                font-size: i == 0 ? 24px : i == 1 ? 16px : 13px;
                                 font-weight: i < 2 ? 700 : 400;
                             }
-                            if impact-lines.length == 0: Text { text: "Add photos to see what will change."; color: Palette.foreground.with-alpha(0.6); font-size: 13px; }
+                            if impact-lines.length == 0: Muted { text: "Add photos to see what will change."; font-size: 13px; }
+                            if finished: HorizontalLayout {
+                                spacing: 8px; alignment: start;
+                                Button { text: "Open output folder"; clicked => { open-output(); } }
+                            }
                         }
                     }
 
-                    Rectangle {
-                        border-radius: 12px;
-                        background: Palette.foreground.with-alpha(0.04);
+                    Card {
                         VerticalLayout {
                             padding: 12px;
                             spacing: 6px;
                             HorizontalLayout {
-                                Text { text: "FILES"; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; color: Palette.foreground.with-alpha(0.55); }
+                                Heading { text: show-log ? "LOG" : "FILES"; }
                                 Rectangle { }
-                                Text { text: running || done > 0 ? done + " / " + total : ""; font-size: 11px; color: Palette.foreground.with-alpha(0.55); }
+                                Muted { text: progress-line; }
+                                if show-log: Button { text: "Open log file"; clicked => { open-log(); } }
                             }
-                            ScrollView {
+                            if !show-log: ScrollView {
                                 VerticalLayout {
                                     spacing: 2px;
                                     for f in files: HorizontalLayout {
                                         spacing: 10px;
-                                        Text { text: f.name; color: f.failed ? #e5484d : Palette.foreground; font-size: 12px; overflow: elide; horizontal-stretch: 3; }
+                                        Text { text: f.name; color: f.failed ? #e5484d : (f.working ? Palette.accent-background : Palette.foreground); font-size: 12px; overflow: elide; horizontal-stretch: 3; }
                                         Text { text: f.before; color: Palette.foreground.with-alpha(0.6); font-size: 12px; horizontal-stretch: 1; horizontal-alignment: right; }
                                         Text { text: f.after; color: Palette.foreground; font-size: 12px; horizontal-stretch: 1; horizontal-alignment: right; }
                                         Text { text: f.quality; color: Palette.foreground.with-alpha(0.6); font-size: 12px; horizontal-stretch: 1; horizontal-alignment: right; }
                                         Text { text: f.status; color: f.failed ? #e5484d : Palette.foreground.with-alpha(0.6); font-size: 12px; horizontal-stretch: 2; overflow: elide; }
                                     }
+                                }
+                            }
+                            if show-log: ScrollView {
+                                VerticalLayout {
+                                    spacing: 1px;
+                                    for l in log-lines: Text { text: l; font-size: 11px; font-family: "Consolas"; color: Palette.foreground.with-alpha(0.8); overflow: elide; }
                                 }
                             }
                         }
@@ -285,14 +336,18 @@ export component App inherits Window {
             }
 
             // footer
-            HorizontalLayout {
-                spacing: 12px;
-                alignment: stretch;
-                ProgressIndicator { progress: total == 0 ? 0 : done / total; indeterminate: running && done == 0; }
-                Button { text: "Undo last"; enabled: !running; clicked => { undo-last(); } }
-                Button { text: paused ? "Resume" : "Pause"; enabled: running; clicked => { pause(); } }
-                Button { text: "Cancel"; enabled: running; clicked => { cancel(); } }
-                Button { text: running ? (paused ? "Paused" : "Working…") : "START"; primary: true; enabled: file-count > 0 && !running; clicked => { start(); } }
+            VerticalLayout {
+                spacing: 6px;
+                if status-line != "": Muted { text: status-line; }
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: stretch;
+                    ProgressIndicator { progress: total == 0 ? 0 : done / total; indeterminate: false; }
+                    Button { text: "Undo last"; enabled: !running; clicked => { undo-last(); } }
+                    Button { text: paused ? "Resume" : "Pause"; enabled: running; clicked => { pause(); } }
+                    Button { text: "Cancel"; enabled: running; clicked => { cancel(); } }
+                    Button { text: running ? (paused ? "Paused" : "Working…") : "START"; primary: true; enabled: file-count > 0 && !running; clicked => { start-job(); } }
+                }
             }
         }
     }

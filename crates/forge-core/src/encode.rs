@@ -154,7 +154,18 @@ pub fn encode(img: &DynamicImage, f: Format, quality: u8, meta: &Meta) -> Result
         #[cfg(feature = "jxl")]
         Format::Jxl => {
             use jpegxl_rs::encode::{EncoderSpeed, Metadata};
-            let mut enc = jpegxl_rs::encoder_builder().quality(q as f32).speed(EncoderSpeed::Squirrel).use_container(true).build()?;
+            // jpegxl-rs's `quality` is libjxl's Butteraugli distance; map 1-100 the way cjxl does.
+            let distance = if q >= 30 { 0.1 + (100 - q) as f32 * 0.09 } else { 53.0 / 3000.0 * (q as f32).powi(2) - 23.0 / 20.0 * q as f32 + 25.0 };
+            // libjxl is single-threaded without a runner; give each file a few threads so one
+            // 8 MP frame takes seconds, not minutes, even when rayon runs several files at once.
+            let threads = (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(2, 8);
+            let runner = jpegxl_rs::ThreadsRunner::new(None, Some(threads)).ok_or_else(|| anyhow!("jxl thread runner"))?;
+            let mut enc = jpegxl_rs::encoder_builder()
+                .quality(distance)
+                .speed(EncoderSpeed::Squirrel)
+                .use_container(true)
+                .parallel_runner(&runner)
+                .build()?;
             if let Some(e) = &meta.exif {
                 let mut boxed = vec![0u8; 4];
                 boxed.extend_from_slice(e);

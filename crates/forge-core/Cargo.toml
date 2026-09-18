@@ -25,6 +25,7 @@ fast_image_resize = { version = "6", features = ["image"] }
 img-parts = "0.4"
 moxcms = "0.9"
 kamadak-exif = "0.6"
+log = { version = "0.4", features = ["std"] }
 rayon = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 dirs = "6"

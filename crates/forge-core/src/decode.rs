@@ -23,7 +23,20 @@ pub fn decode(path: &Path) -> Result<Source> {
         bail!("{} decode not supported yet", kind.label());
     }
     let (img, mut meta, via) = match kind {
-        Kind::Raw => (develop_raw(path)?, Meta::default(), "rawler"),
+        Kind::Raw => {
+            // Camera orientation lives in the container's EXIF (rawler's own field is often Unknown).
+            let (img, raw_orientation) = develop_raw(path)?;
+            let exif = exif_from_container(path);
+            let img = match exif.as_deref().and_then(exif_orientation) {
+                Some(o) => {
+                    let mut img = img;
+                    img.apply_orientation(o);
+                    img
+                }
+                None => apply_raw_orientation(img, raw_orientation),
+            };
+            (img, Meta { exif, ..Meta::default() }, "rawler")
+        }
         #[cfg(feature = "heic")]
         Kind::Heic | Kind::Avif => {
             let (img, meta) = crate::heif::decode(path)?;
@@ -40,10 +53,6 @@ pub fn decode(path: &Path) -> Result<Source> {
             (img, meta, "image")
         }
     };
-    // RAW containers are TIFF/ISOBMFF; pull EXIF from the original file itself.
-    if kind == Kind::Raw {
-        meta.exif = exif_from_container(path);
-    }
     if kind == Kind::Jpeg {
         meta.xmp = xmp_from_jpeg(path);
     }
@@ -60,12 +69,18 @@ fn from_decoder<D: ImageDecoder>(mut dec: D) -> Result<(DynamicImage, Meta)> {
     Ok((img, Meta { icc, exif, xmp: None, has_gps: false }))
 }
 
-fn develop_raw(path: &Path) -> Result<DynamicImage> {
+fn develop_raw(path: &Path) -> Result<(DynamicImage, rawler::Orientation)> {
     let raw = rawler::decode_file(path).map_err(|e| anyhow::anyhow!("rawler: {e}"))?;
     let dev = rawler::imgop::develop::RawDevelop::default();
     let inter = dev.develop_intermediate(&raw).map_err(|e| anyhow::anyhow!("develop: {e}"))?;
     let img = inter.to_dynamic_image().context("rawler produced no image")?;
-    Ok(apply_raw_orientation(img, raw.orientation))
+    Ok((img, raw.orientation))
+}
+
+fn exif_orientation(raw: &[u8]) -> Option<image::metadata::Orientation> {
+    let e = exif::Reader::new().read_raw(raw.to_vec()).ok()?;
+    let v = e.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?.value.get_uint(0)?;
+    image::metadata::Orientation::from_exif(v as u8)
 }
 
 fn apply_raw_orientation(img: DynamicImage, o: rawler::Orientation) -> DynamicImage {

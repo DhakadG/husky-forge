@@ -24,7 +24,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Process files or folders (default command).
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// List past jobs.
     History {
         #[arg(long, default_value_t = 20)]
@@ -61,7 +61,7 @@ enum RuleCmd {
         #[arg(long, default_value_t = 7)]
         every_days: u32,
         #[command(flatten)]
-        run: RunArgs,
+        run: Box<RunArgs>,
     },
     List,
     Rm { id: i64 },
@@ -127,6 +127,17 @@ struct RunArgs {
     /// Do not record this run in the history database.
     #[arg(long)]
     no_history: bool,
+    /// Write results into this folder (mirrors each source folder's structure) instead of beside the originals.
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// RAW rendering: auto levels + contrast (default) or flat.
+    #[arg(long, value_enum, default_value_t = Look::Auto)]
+    raw_look: Look,
+}
+#[derive(Clone, Copy, ValueEnum)]
+enum Look {
+    Auto,
+    Flat,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -191,6 +202,11 @@ impl RunArgs {
             workers: self.workers,
             min_bytes: if self.include_small { 0 } else { Options::default().min_bytes },
             only_if_smaller: !self.keep_larger,
+            output_dir: self.out.clone(),
+            raw_look: match self.raw_look {
+                Look::Auto => forge_core::RawLook::Auto,
+                Look::Flat => forge_core::RawLook::Flat,
+            },
             ..Options::default()
         })
     }
@@ -198,10 +214,11 @@ impl RunArgs {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let log_path = forge_core::logging::init(None);
     let db = || History::open(&cli.db.clone().unwrap_or_else(History::default_path));
     match cli.cmd {
-        None => do_run(&cli.run, db),
-        Some(Cmd::Run(r)) => do_run(&r, db),
+        None => do_run(&cli.run, db, &log_path),
+        Some(Cmd::Run(r)) => do_run(&r, db, &log_path),
         Some(Cmd::History { limit }) => {
             for j in db()?.jobs(limit)? {
                 let flag = if j.undone { " (undone)" } else { "" };
@@ -270,7 +287,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn do_run(a: &RunArgs, db: impl Fn() -> Result<History>) -> Result<()> {
+fn do_run(a: &RunArgs, db: impl Fn() -> Result<History>, log_path: &std::path::Path) -> Result<()> {
     if a.paths.is_empty() {
         bail!("give at least one file or folder (see --help)");
     }
@@ -280,6 +297,9 @@ fn do_run(a: &RunArgs, db: impl Fn() -> Result<History>) -> Result<()> {
         eprintln!("skip  {}  ({why})", path.display());
     }
     eprintln!("{} files, {}", p.items.len(), human(p.total_bytes()));
+    for root in &a.paths {
+        eprintln!("output for {} → {}", root.display(), forge_core::output_dir_for(root, &o).display());
+    }
     if a.dry_run || p.items.is_empty() {
         print_card(&Impact::estimate(&p, &o));
         return Ok(());
@@ -301,6 +321,7 @@ fn do_run(a: &RunArgs, db: impl Fn() -> Result<History>) -> Result<()> {
         let id = db()?.record(&o, &outs, &impact)?;
         eprintln!("recorded as job #{id}  (forge undo {id} reverts a copy/archive job)");
     }
+    eprintln!("log: {}", log_path.display());
     print_card(&impact);
     Ok(())
 }

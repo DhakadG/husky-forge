@@ -27,6 +27,9 @@ pub struct Launch {
     /// Load a saved preset first; explicit flags override it.
     #[arg(long)]
     pub preset: Option<String>,
+    /// Write results into this folder instead of beside the originals.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
     /// Start processing as soon as the paths are planned.
     #[arg(long)]
     pub start: bool,

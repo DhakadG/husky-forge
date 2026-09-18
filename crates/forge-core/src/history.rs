@@ -185,6 +185,7 @@ mod tests {
             had_gps: false,
             icc_converted: false,
             bits: 8,
+            ms: 1,
             error: None,
         }];
         let id = h.record(&o, &outs, &Impact::from_outcomes(&outs, &o)).unwrap();

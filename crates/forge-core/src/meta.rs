@@ -43,35 +43,69 @@ pub fn has_gps(exif: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+/// A JPEG APP1 segment holds at most this much EXIF (65535 - length bytes - "Exif\0\0").
+pub const JPEG_EXIF_MAX: usize = 65_527;
+
 /// Re-serialise EXIF: drop Orientation (pixels are upright after decode),
 /// thumbnails (IFD1) and, when asked, the whole GPS IFD.
 /// ponytail: MakerNote internal offsets are not relocated; most readers cope.
 pub fn rewrite_exif(raw: &[u8], strip_gps: bool) -> Option<Vec<u8>> {
+    rewrite_exif_within(raw, strip_gps, usize::MAX)
+}
+
+/// `rewrite_exif` that also fits the result under `max_bytes`, shedding the least valuable
+/// data first: MakerNote (camera-private, often 100 KB+ in RAW files), then any blob over 4 KB.
+pub fn rewrite_exif_within(raw: &[u8], strip_gps: bool, max_bytes: usize) -> Option<Vec<u8>> {
     let parsed = exif::Reader::new().read_raw(raw.to_vec()).ok()?;
-    let keep: Vec<&Field> = parsed
+    let base: Vec<&Field> = parsed
         .fields()
         .filter(|f| f.ifd_num == In::PRIMARY)
         .filter(|f| f.tag != Tag::Orientation)
         .filter(|f| !(strip_gps && f.tag.context() == Context::Gps))
         .collect();
-    if keep.is_empty() {
-        return None;
+    let blob_len = |f: &Field| match &f.value {
+        exif::Value::Undefined(b, _) => b.len(),
+        exif::Value::Byte(b) => b.len(),
+        _ => 0,
+    };
+    let sheds: [&dyn Fn(&Field) -> bool; 3] = [&|_| true, &|f| f.tag != Tag::MakerNote, &|f| f.tag != Tag::MakerNote && blob_len(f) <= 4096];
+    for keep_if in sheds {
+        let keep: Vec<&Field> = base.iter().copied().filter(|f| keep_if(f)).collect();
+        if keep.is_empty() {
+            return None;
+        }
+        let mut w = Writer::new();
+        for f in &keep {
+            w.push_field(f);
+        }
+        let mut out = std::io::Cursor::new(Vec::new());
+        w.write(&mut out, parsed.little_endian()).ok()?;
+        let out = out.into_inner();
+        if out.len() <= max_bytes {
+            return Some(out);
+        }
     }
-    let mut w = Writer::new();
-    for f in keep {
-        w.push_field(f);
-    }
-    let mut out = std::io::Cursor::new(Vec::new());
-    w.write(&mut out, parsed.little_endian()).ok()?;
-    Some(out.into_inner())
+    log::warn!("EXIF block cannot be made to fit {max_bytes} bytes; dropping it");
+    None
 }
 
 /// Attach already-`carried` metadata to freshly encoded JPEG/PNG/WebP bytes.
 /// AVIF/JXL took theirs at encode time.
 pub fn inject(bytes: Vec<u8>, f: Format, m: &Meta) -> Result<Vec<u8>> {
     let icc = m.icc.clone().map(Bytes::from);
-    let exif = m.exif.clone().map(Bytes::from);
-    let xmp = m.xmp.clone();
+    let mut exif = m.exif.clone();
+    let mut xmp = m.xmp.clone();
+    if f == Format::Jpeg {
+        // JPEG segments cap at 64 KB: shrink the EXIF, drop oversize XMP (extended XMP is phase 3).
+        if exif.as_ref().is_some_and(|e| e.len() > JPEG_EXIF_MAX) {
+            exif = exif.as_deref().and_then(|e| rewrite_exif_within(e, false, JPEG_EXIF_MAX));
+        }
+        if xmp.as_ref().is_some_and(|x| x.len() > 65_000) {
+            log::warn!("XMP block too large for a JPEG segment; dropping it");
+            xmp = None;
+        }
+    }
+    let exif = exif.map(Bytes::from);
     let mut out = Vec::new();
     match f {
         Format::Jpeg => {
@@ -119,6 +153,24 @@ mod tests {
         let mut out = std::io::Cursor::new(Vec::new());
         w.write(&mut out, false).unwrap();
         out.into_inner()
+    }
+
+    #[test]
+    fn oversize_makernote_is_shed_for_jpeg() {
+        let mut w = Writer::new();
+        let make = Field { tag: Tag::Make, ifd_num: In::PRIMARY, value: Value::Ascii(vec![b"Forge".to_vec()]) };
+        let note = Field { tag: Tag::MakerNote, ifd_num: In::PRIMARY, value: Value::Undefined(vec![7u8; 120_000], 0) };
+        w.push_field(&make);
+        w.push_field(&note);
+        let mut out = std::io::Cursor::new(Vec::new());
+        w.write(&mut out, false).unwrap();
+        let raw = out.into_inner();
+        assert!(raw.len() > JPEG_EXIF_MAX);
+        let small = rewrite_exif_within(&raw, false, JPEG_EXIF_MAX).unwrap();
+        assert!(small.len() <= JPEG_EXIF_MAX);
+        let e = exif::Reader::new().read_raw(small).unwrap();
+        assert!(e.get_field(Tag::Make, In::PRIMARY).is_some());
+        assert!(e.get_field(Tag::MakerNote, In::PRIMARY).is_none());
     }
 
     #[test]
