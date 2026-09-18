@@ -3,6 +3,11 @@
 Image processing, perfected. Cross-platform desktop engine for converting, optimizing and archiving
 photographic archives. Rust core, Slint UI, native platform adapters. Builds ship as GitHub Releases.
 
+## Priority
+Windows first (installer, Mica, Explorer integration, HEIC). macOS and Linux keep building in CI and
+ship the same engine; their platform extras (HEIC bundling, signing, Quick Actions) are ported after
+the Windows release is solid.
+
 ## Pipeline
 
 ```
@@ -43,8 +48,10 @@ Split further only when a file passes ~500 lines.
 - [x] LUT (.cube 1D/3D) · fit / fill / pad resize modes
 - [x] SQLite history (`rusqlite` bundled): every job, every file, undo for copy/archive
 - [x] recurring rules (paths + options + cadence), `forge rule run-due` for the OS scheduler
-- [ ] HEIC decode (libheif + libde265, static) · AVIF decode (dav1d, static) — bundled in CI, never a user install
-- [ ] HDR: Rgb32F / PQ / HLG passthrough into AVIF + JXL; tone-map to SDR for JPEG/WebP
+- [x] HEIC/HEIF + AVIF decode via libheif (`heic` feature): Windows static via vcpkg in CI
+- [ ] HEIC on macOS (brew libheif + dylib bundling) and Linux (AppImage bundling) — after the Windows release
+- [x] HDR float sources pass into JXL as 32-bit float
+- [ ] PQ/HLG 10-bit AVIF output with CICP; tone-map float/HDR sources to SDR for JPEG/WebP (today: clipped)
 - [ ] ICC embedding for AVIF (`avif-serialize` colr box) and JXL (`JxlEncoderSetICCProfile`) — drop the sRGB fold
 - [ ] MakerNote offset relocation on EXIF rewrite
 - [ ] rawler: expose white balance / exposure / highlight recovery as advanced options
@@ -56,7 +63,7 @@ Split further only when a file passes ~500 lines.
 - [x] cancel (in-flight files finish cleanly), progress from `Event`, Undo last
 - [x] presets as TOML in the per-user config dir
 - [x] paths on argv → Explorer/Finder/desktop "Forge with Husky"
-- [ ] pause/resume (today: cancel, then START again — planning skips finished copies)
+- [x] pause / resume / cancel
 - [ ] per-file preview thumbnails and before/after compare
 - [ ] history browser inside the app (today: `forge history` / `forge undo`)
 
@@ -74,7 +81,7 @@ Split further only when a file passes ~500 lines.
 - [x] Linux: AppImage + tar.gz
 - [ ] Developer ID signing + notarization (needs certificates in repo secrets)
 - [ ] winget / Homebrew cask / Flatpak manifests
-- [ ] in-app "new version" check against GitHub Releases API
+- [x] in-app "new version" check against GitHub Releases API
 
 ## Dependencies policy
 Everything is statically linked or pure Rust: users install nothing. The one exception today is JXL
