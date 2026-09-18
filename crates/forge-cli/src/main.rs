@@ -1,4 +1,6 @@
 //! `forge` — headless front end for forge-core. Same engine the desktop app uses.
+mod schedule;
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -55,6 +57,14 @@ enum RuleCmd {
     Disable { id: i64 },
     /// Run every rule whose period has elapsed (what the OS scheduler calls).
     RunDue,
+    /// Register a daily `rule run-due` with Task Scheduler / launchd / systemd.
+    Schedule {
+        #[arg(long, default_value_t = 3)]
+        hour: u8,
+        /// Remove the scheduled run instead.
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -226,6 +236,7 @@ fn main() -> Result<()> {
                         print_card(&impact);
                     }
                 }
+                RuleCmd::Schedule { hour, remove } => println!("{}", if remove { schedule::remove()? } else { schedule::install(hour.min(23))? }),
             }
             Ok(())
         }

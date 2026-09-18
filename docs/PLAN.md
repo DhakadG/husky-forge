@@ -15,8 +15,8 @@ source → inspect → decode (raster | RAW) → cap / resize → encode → met
 |--------------|------------------------------------------------------------|--------|
 | `forge-core` | engine: inspect, decode, encode, meta, job, impact         | v0.1   |
 | `forge-cli`  | `forge` binary; CI smoke test + scripting                  | v0.1   |
-| `forge-app`  | Slint desktop UI, simple + advanced mode                   | phase 3 |
-| `forge-platform` | Mica / vibrancy / notifications / scheduler adapters   | phase 4 |
+| `forge-app`  | Slint desktop UI, simple + advanced mode                   | v0.2   |
+| platform code | `forge-app/src/platform.rs` (Mica, vibrancy, toasts) · `forge-cli/src/schedule.rs` (Task Scheduler, launchd, systemd) · `packaging/` | v0.2 |
 
 Split further only when a file passes ~500 lines.
 
@@ -49,23 +49,37 @@ Split further only when a file passes ~500 lines.
 - [ ] MakerNote offset relocation on EXIF rewrite
 - [ ] rawler: expose white balance / exposure / highlight recovery as advanced options
 
-### 3 — UI (Slint)
-- [ ] simple mode: drop zone → format → quality → keep originals → Convert
-- [ ] advanced mode: source / color / transform / output / metadata / originals / workers panels
-- [ ] Impact card first-class; per-file table with before/after, q, via, errors
-- [ ] queue: pause / resume / cancel; progress from `Event`
-- [ ] presets saved as TOML
+### 3 — UI (Slint) ✅ (v0.2)
+- [x] simple mode: drop zone (native file drop) → format → quality → originals → START
+- [x] advanced mode: target size, fit/fill/pad, LUT, metadata, filters, workers, presets
+- [x] Impact card first-class (estimate while planning, real numbers after); per-file rows with before/after, q, bits, decoder, errors
+- [x] cancel (in-flight files finish cleanly), progress from `Event`, Undo last
+- [x] presets as TOML in the per-user config dir
+- [x] paths on argv → Explorer/Finder/desktop "Forge with Husky"
+- [ ] pause/resume (today: cancel, then START again — planning skips finished copies)
+- [ ] per-file preview thumbnails and before/after compare
+- [ ] history browser inside the app (today: `forge history` / `forge undo`)
 
 ### 4 — platform
-- [ ] Windows: Mica via `window-vibrancy`, toast (`notify-rust`), Task Scheduler for rules, Explorer "Forge here"
-- [ ] macOS: NSVisualEffectView, launchd agent, Finder service, notifications
-- [ ] Linux: XDG dirs, systemd user timer, desktop notifications, `.desktop` file
-- [ ] native file dialogs (`rfd`) everywhere
+- [x] Windows: Mica (`window-vibrancy`), toast (`notify-rust`), Task Scheduler (`forge rule schedule`), Explorer context menu (installer)
+- [x] macOS: vibrancy, launchd agent, notifications, `.app` accepts folders/images
+- [x] Linux: XDG dirs (`dirs`), systemd user timer, desktop notifications, `.desktop` with MimeTypes
+- [x] native file dialogs (`rfd`)
+- [ ] macOS Finder Quick Action (Automator workflow in the dmg)
+- [ ] Windows: WinUI-style title bar integration (Slint draws its own chrome today)
 
-### 5 — packaging
-- [ ] Windows: portable zip + MSI (cargo-wix) · macOS: .app + dmg, signed/notarized when certs exist
-- [ ] Linux: AppImage + tar.gz · all attached to the GitHub Release by `release.yml`
+### 5 — packaging (`release.yml`, on every `v*` tag)
+- [x] Windows: Inno Setup installer (Start Menu, optional context menu + PATH) + portable zip
+- [x] macOS: `.app` in a dmg (arm64 + x64), ad-hoc signed — right-click → Open on first launch until a Developer ID exists
+- [x] Linux: AppImage + tar.gz
+- [ ] Developer ID signing + notarization (needs certificates in repo secrets)
+- [ ] winget / Homebrew cask / Flatpak manifests
 - [ ] in-app "new version" check against GitHub Releases API
+
+## Dependencies policy
+Everything is statically linked or pure Rust: users install nothing. The one exception today is JXL
+encoding, which needs cmake + a C++ compiler at *build* time (CI has them; local builds can pass
+`--no-default-features`). HEIC/AVIF decode will follow the same rule (static libheif/dav1d in CI).
 
 ## Non-goals (for now)
 - video, documents — name leaves room, code does not

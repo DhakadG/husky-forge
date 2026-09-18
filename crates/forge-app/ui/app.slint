@@ -1,0 +1,294 @@
+import { Button, ComboBox, Slider, LineEdit, CheckBox, ScrollView, VerticalBox, HorizontalBox, GridBox, Switch, ProgressIndicator, Palette } from "std-widgets.slint";
+
+export struct FileRow {
+    name: string,
+    before: string,
+    after: string,
+    quality: string,
+    status: string,
+    failed: bool,
+}
+
+component Label inherits Text {
+    color: Palette.foreground;
+    font-size: 12px;
+    vertical-alignment: center;
+}
+
+component Section inherits VerticalLayout {
+    in property <string> title;
+    spacing: 8px;
+    padding-bottom: 12px;
+    Text {
+        text: title;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1.2px;
+        color: Palette.foreground.with-alpha(0.55);
+    }
+    @children
+}
+
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    spacing: 12px;
+    alignment: stretch;
+    Label { text: label; min-width: 96px; }
+    @children
+}
+
+export component App inherits Window {
+    title: "Husky Forge";
+    icon: @image-url("../assets/icon.png");
+    min-width: 960px;
+    min-height: 640px;
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    background: transparent;
+
+    // ── state from Rust ──────────────────────────────────────────────
+    in property <int> file-count;
+    in property <string> total-size;
+    in property <[string]> impact-lines;
+    in property <[FileRow]> files;
+    in property <int> done;
+    in property <int> total;
+    in property <bool> running;
+    in property <string> status-line;
+    in property <[string]> presets;
+    in property <bool> transparent-backdrop: false;
+
+    // ── options ──────────────────────────────────────────────────────
+    in-out property <bool> advanced: false;
+    in-out property <int> format-index: 0;        // 0 same, 1 jpeg, 2 png, 3 webp, 4 avif, 5 jxl
+    in-out property <float> quality: 82;
+    in-out property <int> originals-index: 0;     // 0 copy, 1 archive, 2 replace
+    in-out property <int> meta-index: 0;          // 0 keep, 1 strip gps, 2 strip
+    in-out property <int> resize-index: 1;        // 0 none, 1 cap, 2 fit, 3 fill, 4 pad
+    in-out property <string> max-mp: "8";
+    in-out property <string> resize-w: "1920";
+    in-out property <string> resize-h: "1080";
+    in-out property <string> target-mb: "0";
+    in-out property <string> workers: "0";
+    in-out property <string> lut-path: "";
+    in-out property <bool> only-if-smaller: true;
+    in-out property <bool> skip-sidecar: true;
+    in-out property <bool> include-small: false;
+    in-out property <string> preset-name: "";
+
+    callback add-files();
+    callback add-folder();
+    callback clear();
+    pure callback accepts(data-transfer) -> bool;
+    callback dropped(data-transfer);
+    callback pick-lut();
+    callback options-changed();
+    callback start();
+    callback cancel();
+    callback save-preset();
+    callback load-preset(string);
+    callback undo-last();
+
+    Rectangle {
+        background: transparent-backdrop ? transparent : Palette.background;
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 14px;
+
+            // header
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    Text { text: "HUSKY FORGE"; font-size: 18px; font-weight: 800; letter-spacing: 3px; color: Palette.foreground; }
+                    Text { text: "Image processing, perfected."; font-size: 12px; color: Palette.foreground.with-alpha(0.6); }
+                }
+                Rectangle { }
+                Label { text: "Advanced"; }
+                Switch { checked <=> advanced; }
+            }
+
+            HorizontalLayout {
+                spacing: 16px;
+
+                // ── left: sources + options ───────────────────────────
+                VerticalLayout {
+                    width: 46%;
+                    spacing: 12px;
+
+                    drop := DropArea {
+                        height: 150px;
+                        can-drop(event) => { root.accepts(event.data) ? DragAction.copy : DragAction.none }
+                        dropped(event) => { root.dropped(event.data); return DragAction.copy; }
+                        Rectangle {
+                            border-radius: 12px;
+                            border-width: 2px;
+                            border-color: drop.has-drag ? Palette.accent-background : Palette.foreground.with-alpha(0.2);
+                            background: drop.has-drag ? Palette.accent-background.with-alpha(0.12) : Palette.foreground.with-alpha(0.04);
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 6px;
+                                Text {
+                                    text: file-count == 0 ? "DROP YOUR PHOTOS HERE" : file-count + " files · " + total-size;
+                                    font-size: 15px; font-weight: 700; letter-spacing: 1.5px;
+                                    horizontal-alignment: center; color: Palette.foreground;
+                                }
+                                Text {
+                                    text: file-count == 0 ? "RAW · JPEG · PNG · WebP · TIFF · JPEG XL" : status-line;
+                                    font-size: 12px; horizontal-alignment: center; color: Palette.foreground.with-alpha(0.6);
+                                }
+                                HorizontalLayout {
+                                    alignment: center; spacing: 8px;
+                                    Button { text: "Add files"; clicked => { add-files(); } }
+                                    Button { text: "Add folder"; clicked => { add-folder(); } }
+                                    Button { text: "Clear"; enabled: file-count > 0 && !running; clicked => { clear(); } }
+                                }
+                            }
+                        }
+                    }
+
+                    ScrollView {
+                        VerticalLayout {
+                            spacing: 4px;
+                            padding-right: 8px;
+
+                            Section {
+                                title: "OUTPUT";
+                                Row { label: "Format";
+                                    ComboBox { model: ["Same as source", "JPEG", "PNG", "WebP", "AVIF", "JPEG XL"]; current-index <=> format-index; selected => { options-changed(); } }
+                                }
+                                Row { label: "Quality " + Math.round(quality);
+                                    Slider { minimum: 40; maximum: 100; value <=> quality; released => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "Target size";
+                                    LineEdit { text <=> target-mb; placeholder-text: "MB per photo, 0 = off"; edited => { options-changed(); } }
+                                }
+                            }
+
+                            Section {
+                                title: "TRANSFORM";
+                                Row { label: "Resize";
+                                    ComboBox { model: ["None", "Cap megapixels", "Fit inside", "Fill and crop", "Fit and pad"]; current-index <=> resize-index; selected => { options-changed(); } }
+                                }
+                                if resize-index == 1: Row { label: "Max MP";
+                                    LineEdit { text <=> max-mp; edited => { options-changed(); } }
+                                }
+                                if resize-index >= 2: Row { label: "Size";
+                                    LineEdit { text <=> resize-w; placeholder-text: "width"; edited => { options-changed(); } }
+                                    Label { text: "×"; }
+                                    LineEdit { text <=> resize-h; placeholder-text: "height"; edited => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "LUT (.cube)";
+                                    LineEdit { text <=> lut-path; placeholder-text: "none"; edited => { options-changed(); } }
+                                    Button { text: "…"; clicked => { pick-lut(); } }
+                                }
+                            }
+
+                            if advanced: Section {
+                                title: "METADATA";
+                                Row { label: "EXIF / XMP";
+                                    ComboBox { model: ["Keep everything", "Keep, remove GPS", "Strip (keep ICC)"]; current-index <=> meta-index; selected => { options-changed(); } }
+                                }
+                            }
+
+                            Section {
+                                title: "ORIGINALS";
+                                Row { label: "After success";
+                                    ComboBox { model: ["Keep, write copies to _compressed/", "Move to _archive/", "Replace (delete originals)"]; current-index <=> originals-index; selected => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "";
+                                    CheckBox { text: "Only keep results at least 10% smaller"; checked <=> only-if-smaller; toggled => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "";
+                                    CheckBox { text: "Skip RAW files with .xmp sidecars"; checked <=> skip-sidecar; toggled => { options-changed(); } }
+                                }
+                                if advanced: Row { label: "";
+                                    CheckBox { text: "Include files under 300 KB"; checked <=> include-small; toggled => { options-changed(); } }
+                                }
+                            }
+
+                            if advanced: Section {
+                                title: "WORKERS";
+                                Row { label: "Parallel";
+                                    LineEdit { text <=> workers; placeholder-text: "0 = all cores"; edited => { options-changed(); } }
+                                }
+                            }
+
+                            if advanced: Section {
+                                title: "PRESETS";
+                                Row { label: "Load";
+                                    ComboBox { model: presets; selected(name) => { load-preset(name); } }
+                                }
+                                Row { label: "Save as";
+                                    LineEdit { text <=> preset-name; placeholder-text: "name"; }
+                                    Button { text: "Save"; enabled: preset-name != ""; clicked => { save-preset(); } }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── right: impact + files ─────────────────────────────
+                VerticalLayout {
+                    spacing: 12px;
+
+                    Rectangle {
+                        border-radius: 12px;
+                        background: Palette.accent-background.with-alpha(0.10);
+                        border-width: 1px;
+                        border-color: Palette.accent-background.with-alpha(0.35);
+                        VerticalLayout {
+                            padding: 16px;
+                            spacing: 4px;
+                            Text { text: "IMPACT"; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; color: Palette.foreground.with-alpha(0.55); }
+                            for line[i] in impact-lines: Text {
+                                text: line;
+                                color: Palette.foreground;
+                                font-size: i == 0 ? 22px : i == 1 ? 16px : 13px;
+                                font-weight: i < 2 ? 700 : 400;
+                            }
+                            if impact-lines.length == 0: Text { text: "Add photos to see what will change."; color: Palette.foreground.with-alpha(0.6); font-size: 13px; }
+                        }
+                    }
+
+                    Rectangle {
+                        border-radius: 12px;
+                        background: Palette.foreground.with-alpha(0.04);
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 6px;
+                            HorizontalLayout {
+                                Text { text: "FILES"; font-size: 11px; font-weight: 700; letter-spacing: 1.2px; color: Palette.foreground.with-alpha(0.55); }
+                                Rectangle { }
+                                Text { text: running || done > 0 ? done + " / " + total : ""; font-size: 11px; color: Palette.foreground.with-alpha(0.55); }
+                            }
+                            ScrollView {
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    for f in files: HorizontalLayout {
+                                        spacing: 10px;
+                                        Text { text: f.name; color: f.failed ? #e5484d : Palette.foreground; font-size: 12px; overflow: elide; horizontal-stretch: 3; }
+                                        Text { text: f.before; color: Palette.foreground.with-alpha(0.6); font-size: 12px; horizontal-stretch: 1; horizontal-alignment: right; }
+                                        Text { text: f.after; color: Palette.foreground; font-size: 12px; horizontal-stretch: 1; horizontal-alignment: right; }
+                                        Text { text: f.quality; color: Palette.foreground.with-alpha(0.6); font-size: 12px; horizontal-stretch: 1; horizontal-alignment: right; }
+                                        Text { text: f.status; color: f.failed ? #e5484d : Palette.foreground.with-alpha(0.6); font-size: 12px; horizontal-stretch: 2; overflow: elide; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // footer
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: stretch;
+                ProgressIndicator { progress: total == 0 ? 0 : done / total; indeterminate: running && done == 0; }
+                Button { text: "Undo last"; enabled: !running; clicked => { undo-last(); } }
+                Button { text: "Cancel"; enabled: running; clicked => { cancel(); } }
+                Button { text: running ? "Working…" : "START"; primary: true; enabled: file-count > 0 && !running; clicked => { start(); } }
+            }
+        }
+    }
+}

@@ -12,37 +12,54 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: forge.exe
-            archive: husky-forge-windows-x64.zip
           - os: macos-latest
             target: aarch64-apple-darwin
-            bin: forge
-            archive: husky-forge-macos-arm64.tar.gz
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
-            bin: forge
-            archive: husky-forge-macos-x64.tar.gz
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bin: forge
-            archive: husky-forge-linux-x64.tar.gz
     runs-on: ${{ matrix.os }}
+    env:
+      FORGE_VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p forge-cli --target ${{ matrix.target }}
-      - name: package
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libdbus-1-dev libfuse2
+      - run: cargo build --release --workspace --target ${{ matrix.target }}
+
+      - name: package (windows)
+        if: runner.os == 'Windows'
         shell: bash
         run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.bin }} dist/
-          cp README.md LICENSE dist/
-          cd dist
-          if [[ "${{ matrix.archive }}" == *.zip ]]; then 7z a ../${{ matrix.archive }} .; else tar czf ../${{ matrix.archive }} .; fi
+          V=${FORGE_VERSION#v}
+          mkdir -p dist/win
+          cp target/${{ matrix.target }}/release/husky-forge.exe target/${{ matrix.target }}/release/forge.exe README.md LICENSE dist/win/
+          (cd dist/win && 7z a ../husky-forge-$V-windows-x64-portable.zip .)
+          FORGE_VERSION=$V "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" packaging/windows.iss
+          ls dist
+      - name: package (macos)
+        if: runner.os == 'macOS'
+        run: |
+          V=${FORGE_VERSION#v}
+          ARCH=$([[ "${{ matrix.target }}" == aarch64* ]] && echo arm64 || echo x64)
+          bash packaging/macos-bundle.sh ${{ matrix.target }} $V husky-forge-$V-macos-$ARCH.dmg
+          tar czf husky-forge-$V-macos-$ARCH-cli.tar.gz -C target/${{ matrix.target }}/release forge
+      - name: package (linux)
+        if: runner.os == 'Linux'
+        run: |
+          V=${FORGE_VERSION#v}
+          bash packaging/linux-appimage.sh ${{ matrix.target }} $V husky-forge-$V-linux-x64.AppImage
+          tar czf husky-forge-$V-linux-x64.tar.gz -C target/${{ matrix.target }}/release husky-forge forge
       - uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.archive }}
+          files: |
+            dist/*.exe
+            dist/*.zip
+            *.dmg
+            *.AppImage
+            *.tar.gz
           generate_release_notes: true

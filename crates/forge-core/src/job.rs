@@ -1,6 +1,7 @@
 //! Job engine: walk → filter → plan → parallel process → verify → atomic commit.
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 use rayon::prelude::*;
@@ -176,10 +177,17 @@ pub enum Event<'a> {
 
 /// Process every planned item on a rayon pool; `on` is called from worker threads.
 pub fn run(plan: &Plan, o: &Options, on: &(dyn Fn(Event) + Sync)) -> Vec<Outcome> {
+    run_with(plan, o, on, &AtomicBool::new(false))
+}
+
+/// `run` with a cancel flag: items not yet started when it flips are skipped;
+/// items in flight finish (their .part is committed or removed, never half-written).
+pub fn run_with(plan: &Plan, o: &Options, on: &(dyn Fn(Event) + Sync), cancel: &AtomicBool) -> Vec<Outcome> {
     let pool = rayon::ThreadPoolBuilder::new().num_threads(o.workers).build().expect("thread pool");
     pool.install(|| {
         plan.items
             .par_iter()
+            .filter(|_| !cancel.load(Ordering::Relaxed))
             .map(|item| {
                 on(Event::Started(item));
                 let out = process(item, o).unwrap_or_else(|e| Outcome {
