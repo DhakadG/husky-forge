@@ -1,7 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 //! Husky Forge desktop app: Slint front end over forge-core.
-mod presets;
 mod platform;
+mod presets;
+mod update;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -145,6 +146,16 @@ fn main() -> Result<()> {
     let argv: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).filter(|p| p.exists()).collect();
     if !argv.is_empty() {
         add(&ui, &st, argv);
+    }
+
+    // Version check off the UI thread; a newer tag just shows in the status line.
+    {
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            if let Some(tag) = update::newer_release() {
+                let _ = weak.upgrade_in_event_loop(move |ui| ui.set_update_line(format!("{tag} is available at {}", update::RELEASES).into()));
+            }
+        });
     }
 
     ui.run()?;
